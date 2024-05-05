@@ -1,6 +1,6 @@
-use crate::error;
 use crate::keydir::{Entry, EntryWithLiveness, Keydir, Liveness};
 use crate::Options;
+use crate::{error, FlushBehavior};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -161,40 +161,34 @@ where
         }
     }
 
-    pub(crate) async fn insert(&mut self, k: K, v: V) -> crate::Result<Option<V>> {
+    pub(crate) async fn insert(&mut self, k: K, v: V) -> crate::Result<()> {
         self.write(k, ValueOrDelete::Value(v)).await
     }
 
-    pub(crate) async fn remove(&mut self, k: K) -> crate::Result<Option<V>> {
-        self.write(k, ValueOrDelete::Delete).await
+    pub(crate) async fn remove(&mut self, k: K) -> crate::Result<()> {
+        if self.keydir.contains_key(&k) {
+            self.write(k, ValueOrDelete::Delete).await
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn contains_key(&self, k: &K) -> bool {
+        self.keydir.contains_key(k)
     }
 
     pub(crate) fn keys(&self) -> std::collections::hash_map::Keys<'_, K, Entry> {
         self.keydir.keys()
     }
 
-    async fn write(&mut self, k: K, v: ValueOrDelete<V>) -> crate::Result<Option<V>> {
-        // tx_id = tx_id + 1
+    async fn write(&mut self, k: K, v: ValueOrDelete<V>) -> crate::Result<()> {
         self.tx_id += 1;
-        // encoded_tx_id = Binary.encode_u128_be(tx_id)
         let encoded_tx_id = self.tx_id.to_be_bytes();
-        // encoded_key = Binary.encode_term(key)
         let encoded_key = bincode::serialize(&k).map_err(|e| error::SerializeError {
             msg: "unable to serialize to bincode".to_string(),
             source: e,
         })?;
 
-        // encoded_value =
-        //   case value do
-        //     {:insert, v} ->
-        //       Binary.encode_term(v)
-
-        //     # pass through untouched,
-        //     # as when reading we just do a direct binary comparison
-        //     # against this value
-        //     :delete ->
-        //       Binary.tombstone()
-        //   end
         let encoded_value = match v {
             ValueOrDelete::Value(ref v) => {
                 bincode::serialize(v).map_err(|e| error::SerializeError {
@@ -210,27 +204,12 @@ where
             }
         };
 
-        // key_size =
-        //   byte_size(encoded_key)
         let key_size = encoded_key.len();
 
-        // value_size =
-        //   byte_size(encoded_value)
         let value_size = encoded_value.len();
 
-        // encoded_key_size = Binary.encode_u32_be(key_size)
-        // encoded_value_size = Binary.encode_u32_be(value_size)
         let encoded_key_size = (key_size as u32).to_be_bytes();
         let encoded_value_size = (value_size as u32).to_be_bytes();
-
-        // payload =
-        //   [
-        //     encoded_tx_id,
-        //     encoded_key_size,
-        //     encoded_value_size,
-        //     encoded_key,
-        //     encoded_value
-        //   ]
 
         let mut payload = vec![];
         payload.extend_from_slice(&encoded_tx_id);
@@ -239,35 +218,14 @@ where
         payload.extend_from_slice(&encoded_key);
         payload.extend_from_slice(&encoded_value);
 
-        // hash =
-        //   Binary.hash(payload)
         let hash = blake3::hash(&payload);
         let hash = hash.as_bytes();
 
-        // @hash_size = byte_size(hash)
-
-        // # an iolist, so there is no further serialization,
-        // # we write this directly to disk
-        // entry = [hash, payload]
-
-        // :ok = IO.binwrite(active_file, entry)
-        // :ok = :file.datasync(active_file)
         self.active_file.write_all(hash).await?;
         self.active_file.write_all(&payload).await?;
 
-        // value_position = offset + Binary.header_size() + key_size
         let value_position = self.offset + HEADER_SIZE as u64 + key_size as u64;
 
-        // Keydir.insert(
-        //   keydir,
-        //   {
-        //     key,
-        //     active_file_id,
-        //     value_size,
-        //     value_position,
-        //     tx_id
-        //   }
-        // )
         let entry = Entry {
             file_id: self.active_file_id,
             value_size: value_size.try_into().unwrap(),
@@ -279,39 +237,14 @@ where
             ValueOrDelete::Value(_) => {
                 self.keydir.insert(k, entry);
             }
-            ValueOrDelete::Delete => self.keydir.remove(k),
+            ValueOrDelete::Delete => {
+                self.keydir.remove(&k);
+            }
         }
 
-        // entry_size = Binary.header_size() + key_size + value_size
         let entry_size = HEADER_SIZE + key_size + value_size;
 
         self.offset += entry_size as u64;
-
-        // state =
-        //   state
-        //   |> Map.update!(:offset, fn offset ->
-        //     offset + entry_size
-        //   end)
-        //   |> Map.put(:tx_id, tx_id)
-
-        // state =
-        //   if state[:offset] >= state[:options][:max_file_size_bytes] do
-        //     File.close(active_file)
-
-        //     active_file_id = active_file_id + 1
-
-        //     {:ok, new_active_file} =
-        //       [db_directory, to_string(active_file_id)]
-        //       |> Path.join()
-        //       |> File.open([:append, :raw])
-
-        //     state
-        //     |> Map.put(:active_file_id, active_file_id)
-        //     |> Map.put(:offset, 0)
-        //     |> Map.put(:active_file, new_active_file)
-        //   else
-        //     state
-        //   end
 
         if self.offset >= self.options.max_file_size_bytes {
             self.active_file.flush().await?;
@@ -332,7 +265,11 @@ where
             self.active_file = active_file;
         }
 
-        Ok(None)
+        if self.options.flush_behavior == FlushBehavior::AfterEveryWrite {
+            self.flush().await
+        } else {
+            Ok(())
+        }
     }
 
     async fn load_file(
@@ -352,7 +289,7 @@ where
         let mut offset = 0;
 
         while let Some((k, entry_with_liveness)) =
-            Self::read_records(&mut reader, &mut offset, file_id).await?
+            Self::read_record(&mut reader, &mut offset, file_id).await?
         {
             entries.insert(k, entry_with_liveness);
         }
@@ -360,7 +297,7 @@ where
         Ok(entries)
     }
 
-    async fn read_records<R: AsyncRead + Unpin>(
+    async fn read_record<R: AsyncRead + Unpin>(
         reader: &mut R,
         offset: &mut u64,
         file_id: u64,
@@ -452,7 +389,7 @@ impl<
                     .unwrap();
                 rt.block_on(async {
                     // TODO is sync_all/sync_data necessary here?
-                    let _ = self.active_file.flush().await;
+                    let _ = self.flush().await;
                 });
             });
         });

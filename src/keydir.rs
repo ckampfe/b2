@@ -17,16 +17,20 @@ where
         Keydir { keydir: hm }
     }
 
-    pub(crate) fn insert(&mut self, k: K, entry: Entry) {
-        self.keydir.insert(k, entry);
+    pub(crate) fn insert(&mut self, k: K, entry: Entry) -> Option<Entry> {
+        self.keydir.insert(k, entry)
     }
 
     pub(crate) fn get(&self, k: &K) -> Option<&Entry> {
         self.keydir.get(k)
     }
 
-    pub(crate) fn remove(&mut self, k: K) {
-        self.keydir.remove(&k);
+    pub(crate) fn remove(&mut self, k: &K) -> Option<Entry> {
+        self.keydir.remove(&k)
+    }
+
+    pub(crate) fn contains_key(&self, k: &K) -> bool {
+        self.keydir.contains_key(k)
     }
 
     pub(crate) fn keys(&self) -> std::collections::hash_map::Keys<'_, K, Entry> {

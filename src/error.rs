@@ -10,10 +10,12 @@ pub enum Error {
     DeserializeError(#[from] DeserializeError),
 }
 
+/// a wrapper because bincode errors do not differentiate
+/// betweeen serialization and deserialization
 #[derive(Debug, Error)]
 pub struct SerializeError {
     pub msg: String,
-    #[source] // optional if field name is `source`
+    #[source]
     pub source: Box<bincode::ErrorKind>,
 }
 
@@ -23,10 +25,12 @@ impl std::fmt::Display for SerializeError {
     }
 }
 
+/// a wrapper because bincode errors do not differentiate
+/// betweeen serialization and deserialization
 #[derive(Debug, Error)]
 pub struct DeserializeError {
     pub msg: String,
-    #[source] // optional if field name is `source`
+    #[source]
     pub source: Box<bincode::ErrorKind>,
 }
 
