@@ -10,10 +10,10 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
-const HASH_SIZE: usize = 32;
-const TX_ID_SIZE: usize = 16;
-const KEY_SIZE_SIZE: usize = 4;
-const VALUE_SIZE_SIZE: usize = 4;
+const HASH_SIZE: usize = blake3::OUT_LEN;
+const TX_ID_SIZE: usize = std::mem::size_of::<u128>();
+const KEY_SIZE_SIZE: usize = std::mem::size_of::<u32>();
+const VALUE_SIZE_SIZE: usize = std::mem::size_of::<u32>();
 const HEADER_SIZE: usize = HASH_SIZE + TX_ID_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE;
 
 // const TOMBSTONE: [u8; 1] = [0];
