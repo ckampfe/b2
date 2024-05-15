@@ -1,4 +1,3 @@
-use crate::base::{Tombstone, TOMBSTONE};
 use crate::loadable::Loadable;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -49,7 +48,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct EntryPointer {
     pub(crate) file_id: u64,
     pub(crate) value_position: u64,
@@ -57,10 +56,16 @@ pub(crate) struct EntryPointer {
     pub(crate) tx_id: u128,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct EntryWithLiveness {
     pub(crate) liveness: Liveness,
     pub(crate) entry: EntryPointer,
+}
+
+impl PartialOrd for EntryWithLiveness {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.entry.tx_id.partial_cmp(&other.entry.tx_id)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -83,12 +88,7 @@ where
     {
         // end header
         let record = match crate::record::Record::read_from(reader).await {
-            Ok(option) => match option {
-                Some(record) => record,
-                None => {
-                    return Ok(None);
-                }
-            },
+            Ok(record) => record,
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::UnexpectedEof {
                     return Ok(None);
@@ -102,26 +102,15 @@ where
             return Err(crate::error::Error::CorruptRecord);
         }
 
+        let key = record.key()?;
+
+        let liveness = record.liveness();
+
         let value_position =
             *offset + crate::record::Record::HEADER_SIZE as u64 + record.key_size() as u64;
 
         // and update the offset to reflect that we have read a record
         *offset += record.len() as u64;
-
-        let liveness = if record.value_bytes()
-            == TOMBSTONE.get_or_init(|| bincode::serialize(&Tombstone).unwrap())
-        {
-            Liveness::Deleted
-        } else {
-            Liveness::Live
-        };
-
-        let key = bincode::deserialize(record.key_bytes()).map_err(|e| {
-            crate::error::DeserializeError {
-                msg: "unable to deserialize from bincode".to_string(),
-                source: e,
-            }
-        })?;
 
         Ok(Some((
             key,
@@ -135,9 +124,5 @@ where
                 },
             },
         )))
-    }
-
-    fn tx_id(&self) -> u128 {
-        self.entry.tx_id
     }
 }

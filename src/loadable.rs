@@ -2,12 +2,7 @@ use std::hash::Hash;
 use std::{collections::HashMap, path::Path};
 use tokio::io::AsyncRead;
 
-pub(crate) trait Loadable<K: Eq + Hash>
-where
-    Self: Sized,
-{
-    fn tx_id(&self) -> u128;
-
+pub(crate) trait Loadable<K: Eq + Hash>: PartialOrd + Sized {
     async fn load_latest_entries(
         db_directory: &Path,
         db_file_ids: Vec<u64>,
@@ -24,7 +19,7 @@ where
         for file_entries in all_files_entries {
             for (key, potential_new_entry) in file_entries {
                 if let Some(existing_entry) = all_entries_with_livenesses.get(&key) {
-                    if potential_new_entry.tx_id() > existing_entry.tx_id() {
+                    if &potential_new_entry > existing_entry {
                         all_entries_with_livenesses.insert(key, potential_new_entry);
                     }
                 } else {

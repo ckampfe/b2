@@ -1,4 +1,3 @@
-use crate::base::{Tombstone, TOMBSTONE};
 use crate::keydir::Liveness;
 use crate::loadable::Loadable;
 use serde::de::DeserializeOwned;
@@ -7,6 +6,7 @@ use tokio::io::AsyncRead;
 
 /// points to data in a db file,
 /// used for merging db files
+#[derive(PartialEq)]
 pub(crate) struct MergePointer {
     /// whether the data is an insert or a delete
     pub(crate) liveness: Liveness,
@@ -25,6 +25,12 @@ pub(crate) struct MergePointer {
     pub(crate) value_size: u32,
 }
 
+impl PartialOrd for MergePointer {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.tx_id.partial_cmp(&other.tx_id)
+    }
+}
+
 impl<K: Eq + Hash + DeserializeOwned> Loadable<K> for MergePointer {
     async fn read<R: AsyncRead + Unpin>(
         reader: &mut tokio::io::BufReader<R>,
@@ -32,10 +38,7 @@ impl<K: Eq + Hash + DeserializeOwned> Loadable<K> for MergePointer {
         file_id: u64,
     ) -> crate::Result<Option<(K, Self)>> {
         let record = match crate::record::Record::read_from(reader).await {
-            Ok(option) => match option {
-                Some(header) => header,
-                None => return Ok(None),
-            },
+            Ok(record) => record,
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::UnexpectedEof {
                     return Ok(None);
@@ -49,24 +52,13 @@ impl<K: Eq + Hash + DeserializeOwned> Loadable<K> for MergePointer {
             return Err(crate::error::Error::CorruptRecord);
         }
 
+        let key = record.key()?;
+
+        let liveness = record.liveness();
+
+        let body_position = *offset + crate::record::Record::HEADER_SIZE as u64;
+
         *offset += record.len() as u64;
-
-        let liveness = if record.value_bytes()
-            == TOMBSTONE.get_or_init(|| bincode::serialize(&Tombstone).unwrap())
-        {
-            Liveness::Deleted
-        } else {
-            Liveness::Live
-        };
-
-        let key = bincode::deserialize(record.key_bytes()).map_err(|e| {
-            crate::error::DeserializeError {
-                msg: "unable to deserialize from bincode".to_string(),
-                source: e,
-            }
-        })?;
-
-        let body_offset = *offset + crate::record::Record::HEADER_SIZE as u64;
 
         Ok(Some((
             key,
@@ -74,15 +66,11 @@ impl<K: Eq + Hash + DeserializeOwned> Loadable<K> for MergePointer {
                 liveness,
                 file_id,
                 tx_id: record.tx_id(),
-                body_position: body_offset,
+                body_position,
                 body_size: record.body_len().try_into().unwrap(),
                 key_size: record.key_size(),
                 value_size: record.value_size(),
             },
         )))
-    }
-
-    fn tx_id(&self) -> u128 {
-        self.tx_id
     }
 }

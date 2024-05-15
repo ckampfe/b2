@@ -1,16 +1,38 @@
+use std::sync::OnceLock;
+
+use crate::keydir::Liveness;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
+// TODO thse should probably something else.
+// I think they serialize to `[]`, which is probably not good
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Tombstone;
+
+pub(crate) static TOMBSTONE: OnceLock<Vec<u8>> = OnceLock::new();
+
+/// A record is a "header" and a "body"
+/// The header is (in on-disk and in-memory order):
+/// - hash (the paper calls this `crc`)
+/// - tx_id (the paper calls this `tstamp`)
+/// - key_size
+/// - value_size
+///
+/// The body is (also in on-disk and in-memory order):
+/// - key
+/// - value
 pub(crate) struct Record {
     buf: Vec<u8>,
 }
 
+// crate-public impls
 impl Record {
     pub(crate) const HEADER_SIZE: usize =
         Record::HASH_SIZE + Record::TX_ID_SIZE + Record::KEY_SIZE_SIZE + Record::VALUE_SIZE_SIZE;
 
     pub(crate) async fn read_from<R: AsyncRead + Unpin>(
         reader: &mut tokio::io::BufReader<R>,
-    ) -> std::io::Result<Option<Record>> {
+    ) -> std::io::Result<Record> {
         let buf = vec![0u8; Record::HEADER_SIZE];
 
         let mut record = Record { buf };
@@ -27,11 +49,26 @@ impl Record {
 
         reader.read_exact(body).await?;
 
-        Ok(Some(record))
+        Ok(record)
+    }
+
+    pub(crate) fn key<K: DeserializeOwned>(&self) -> Result<K, crate::error::DeserializeError> {
+        bincode::deserialize(self.key_bytes()).map_err(|e| crate::error::DeserializeError {
+            msg: "unable to deserialize from bincode".to_string(),
+            source: e,
+        })
     }
 
     pub(crate) fn is_valid(&self) -> bool {
         self.hash_read_from_disk() == self.computed_hash()
+    }
+
+    pub(crate) fn liveness(&self) -> Liveness {
+        if self.value_bytes() == TOMBSTONE.get_or_init(|| bincode::serialize(&Tombstone).unwrap()) {
+            Liveness::Deleted
+        } else {
+            Liveness::Live
+        }
     }
 
     pub(crate) fn key_bytes(&self) -> &[u8] {
@@ -67,6 +104,7 @@ impl Record {
     }
 }
 
+// private impls
 impl Record {
     const HASH_SIZE: usize = blake3::OUT_LEN;
     const TX_ID_SIZE: usize = std::mem::size_of::<u128>();

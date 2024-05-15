@@ -1,22 +1,17 @@
 use crate::keydir::{EntryPointer, EntryWithLiveness, Keydir, Liveness};
 use crate::loadable::Loadable;
 use crate::merge_pointer::MergePointer;
+use crate::record::Tombstone;
 use crate::Options;
 use crate::{error, FlushBehavior};
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
-
-#[derive(Serialize, Deserialize)]
-pub(crate) struct Tombstone;
-
-pub(crate) static TOMBSTONE: OnceLock<Vec<u8>> = OnceLock::new();
 
 enum ValueOrDelete<V> {
     Value(V),
