@@ -1,27 +1,22 @@
-use crate::keydir::{Entry, EntryWithLiveness, Keydir, Liveness};
+use crate::keydir::{EntryPointer, EntryWithLiveness, Keydir, Liveness};
+use crate::loadable::Loadable;
+use crate::merge_pointer::MergePointer;
 use crate::Options;
 use crate::{error, FlushBehavior};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
-
-const HASH_SIZE: usize = blake3::OUT_LEN;
-const TX_ID_SIZE: usize = std::mem::size_of::<u128>();
-const KEY_SIZE_SIZE: usize = std::mem::size_of::<u32>();
-const VALUE_SIZE_SIZE: usize = std::mem::size_of::<u32>();
-const HEADER_SIZE: usize = HASH_SIZE + TX_ID_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE;
-
-// const TOMBSTONE: [u8; 1] = [0];
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 #[derive(Serialize, Deserialize)]
-struct Tombstone;
+pub(crate) struct Tombstone;
 
-static TOMBSTONE: OnceLock<Vec<u8>> = OnceLock::new();
+pub(crate) static TOMBSTONE: OnceLock<Vec<u8>> = OnceLock::new();
 
 enum ValueOrDelete<V> {
     Value(V),
@@ -50,25 +45,7 @@ where
     V: Serialize + DeserializeOwned + Send,
 {
     pub(crate) async fn new(db_directory: &Path, options: Options) -> crate::Result<Self> {
-        let mut db_files = vec![];
-
-        let mut dir_reader = tokio::fs::read_dir(db_directory).await?;
-
-        while let Some(dir_entry) = dir_reader.next_entry().await? {
-            if dir_entry.file_type().await?.is_file() {
-                let path = dir_entry.path();
-                let file_name = path.file_name().unwrap().to_owned();
-                let file_name = file_name.to_str().unwrap();
-                let file_name = file_name.to_owned();
-
-                db_files.push(file_name);
-            }
-        }
-
-        let mut db_file_ids: Vec<u64> = db_files
-            .iter()
-            .filter_map(|db_file| db_file.parse::<u64>().ok())
-            .collect();
+        let mut db_file_ids = Self::db_file_ids(db_directory).await?;
 
         db_file_ids.sort();
 
@@ -76,27 +53,9 @@ where
 
         let active_file_id = latest_file_id + 1;
 
-        let mut all_files_entries = vec![];
-
-        // TODO make parallel
-        for file_id in db_file_ids {
-            let file_entries = Self::load_file(db_directory, file_id).await?;
-            all_files_entries.push(file_entries);
-        }
-
-        let mut all_entries_with_livenesses: HashMap<K, EntryWithLiveness> = HashMap::new();
-
-        for file_entries in all_files_entries {
-            for (key, potential_new_entry) in file_entries {
-                if let Some(existing_entry) = all_entries_with_livenesses.get(&key) {
-                    if potential_new_entry.entry.tx_id > existing_entry.entry.tx_id {
-                        all_entries_with_livenesses.insert(key, potential_new_entry);
-                    }
-                } else {
-                    all_entries_with_livenesses.insert(key, potential_new_entry);
-                }
-            }
-        }
+        let all_entries_with_livenesses: HashMap<K, EntryWithLiveness> =
+            <EntryWithLiveness as Loadable<K>>::load_latest_entries(db_directory, db_file_ids)
+                .await?;
 
         let all_entries = all_entries_with_livenesses
             .into_iter()
@@ -177,8 +136,34 @@ where
         self.keydir.contains_key(k)
     }
 
-    pub(crate) fn keys(&self) -> std::collections::hash_map::Keys<'_, K, Entry> {
+    pub(crate) fn keys(&self) -> std::collections::hash_map::Keys<'_, K, EntryPointer> {
         self.keydir.keys()
+    }
+
+    pub(crate) async fn merge(&mut self) -> crate::Result<()> {
+        let all_db_files = Self::db_file_ids(&self.db_directory).await?;
+
+        let inactive_db_files: Vec<_> = all_db_files
+            .into_iter()
+            .filter(|file_id| *file_id != self.active_file_id)
+            .collect();
+
+        let merge_pointers = <MergePointer as Loadable<K>>::load_latest_entries(
+            &self.db_directory,
+            inactive_db_files,
+        )
+        .await?;
+
+        let live_merge_pointers: Vec<_> = merge_pointers
+            .into_iter()
+            .filter(|(key, merge_pointer)| merge_pointer.liveness == Liveness::Live)
+            .collect();
+
+        Ok(())
+    }
+
+    pub(crate) async fn flush(&mut self) -> crate::Result<()> {
+        self.active_file.flush().await.map_err(|e| e.into())
     }
 
     async fn write(&mut self, k: K, v: ValueOrDelete<V>) -> crate::Result<()> {
@@ -224,12 +209,13 @@ where
         self.active_file.write_all(hash).await?;
         self.active_file.write_all(&payload).await?;
 
-        let value_position = self.offset + HEADER_SIZE as u64 + key_size as u64;
+        let value_position =
+            self.offset + crate::record::Record::HEADER_SIZE as u64 + key_size as u64;
 
-        let entry = Entry {
+        let entry = EntryPointer {
             file_id: self.active_file_id,
-            value_size: value_size.try_into().unwrap(),
             value_position,
+            value_size: value_size.try_into().unwrap(),
             tx_id: self.tx_id,
         };
 
@@ -242,7 +228,7 @@ where
             }
         }
 
-        let entry_size = HEADER_SIZE + key_size + value_size;
+        let entry_size = crate::record::Record::HEADER_SIZE + key_size + value_size;
 
         self.offset += entry_size as u64;
 
@@ -272,107 +258,26 @@ where
         }
     }
 
-    async fn load_file(
-        db_directory: &Path,
-        file_id: u64,
-    ) -> crate::Result<HashMap<K, EntryWithLiveness>> {
-        let mut path = db_directory.to_owned();
+    // {key, tx_id, record, header_bytes_read, key_size, value_size}
 
-        path.push(file_id.to_string());
+    async fn db_file_ids(db_directory: &Path) -> crate::Result<Vec<u64>> {
+        let mut file_ids = vec![];
 
-        let f = tokio::fs::File::open(path).await?;
+        let mut dir_reader = tokio::fs::read_dir(db_directory).await?;
 
-        let mut reader = tokio::io::BufReader::new(f);
-
-        let mut entries = HashMap::new();
-
-        let mut offset = 0;
-
-        while let Some((k, entry_with_liveness)) =
-            Self::read_record(&mut reader, &mut offset, file_id).await?
-        {
-            entries.insert(k, entry_with_liveness);
+        while let Some(dir_entry) = dir_reader.next_entry().await? {
+            if dir_entry.file_type().await?.is_file() {
+                let path = dir_entry.path();
+                let file_name = path.file_name().unwrap().to_owned();
+                let file_name = file_name.to_str().unwrap();
+                let file_name = file_name.to_owned();
+                if let Ok(file_id) = file_name.parse() {
+                    file_ids.push(file_id);
+                }
+            }
         }
 
-        Ok(entries)
-    }
-
-    async fn read_record<R: AsyncRead + Unpin>(
-        reader: &mut R,
-        offset: &mut u64,
-        file_id: u64,
-    ) -> crate::Result<Option<(K, EntryWithLiveness)>> {
-        let mut header = vec![0u8; HEADER_SIZE];
-
-        // if we can't read any header, bytes it means we're done
-        if let Err(e) = reader.read_exact(&mut header).await {
-            if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                return Ok(None);
-            }
-        };
-
-        // start header
-
-        // TODO compare hashes
-        let mut position = 0;
-        let hash = &header[position..position + HASH_SIZE];
-        position += HASH_SIZE;
-        let encoded_tx_id = &header[position..position + TX_ID_SIZE];
-        position += TX_ID_SIZE;
-        let encoded_key_size = &header[position..position + KEY_SIZE_SIZE];
-        position += KEY_SIZE_SIZE;
-        let encoded_value_size = &header[position..position + VALUE_SIZE_SIZE];
-
-        let tx_id = u128::from_be_bytes(encoded_tx_id.try_into().unwrap());
-        let key_size = u32::from_be_bytes(encoded_key_size.try_into().unwrap());
-        let value_size = u32::from_be_bytes(encoded_value_size.try_into().unwrap());
-        // end header
-
-        // start body
-        let key_size_usize: usize = key_size.try_into().unwrap();
-        let value_size_usize: usize = value_size.try_into().unwrap();
-        let mut body = vec![0u8; key_size_usize + value_size_usize];
-        // if we've already read header bytes and can't read body bytes,
-        // it's an error
-        reader.read_exact(&mut body).await?;
-
-        position = 0;
-        let encoded_key = &body[position..position + key_size_usize];
-        position += key_size_usize;
-        let encoded_value = &body[position..position + value_size_usize];
-        // end body
-
-        let value_position = *offset + HEADER_SIZE as u64 + key_size as u64;
-        *offset += HEADER_SIZE as u64 + body.len() as u64;
-
-        let liveness =
-            if encoded_value == TOMBSTONE.get_or_init(|| bincode::serialize(&Tombstone).unwrap()) {
-                Liveness::Deleted
-            } else {
-                Liveness::Live
-            };
-
-        let key = bincode::deserialize(encoded_key).map_err(|e| error::DeserializeError {
-            msg: "unable to deserialize from bincode".to_string(),
-            source: e,
-        })?;
-
-        Ok(Some((
-            key,
-            EntryWithLiveness {
-                liveness,
-                entry: Entry {
-                    file_id,
-                    value_size,
-                    value_position,
-                    tx_id,
-                },
-            },
-        )))
-    }
-
-    pub(crate) async fn flush(&mut self) -> crate::Result<()> {
-        self.active_file.flush().await.map_err(|e| e.into())
+        Ok(file_ids)
     }
 }
 

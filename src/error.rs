@@ -1,3 +1,4 @@
+use std::num::ParseIntError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -8,6 +9,10 @@ pub enum Error {
     SerializeError(#[from] SerializeError),
     #[error("could not deserialize")]
     DeserializeError(#[from] DeserializeError),
+    #[error("could not parse")]
+    ParseIntError(#[from] ParseIntError),
+    #[error("hash from input and computed hash do not match")]
+    CorruptRecord,
 }
 
 /// a wrapper because bincode errors do not differentiate

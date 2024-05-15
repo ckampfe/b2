@@ -1,6 +1,7 @@
 use crate::base::Base;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,6 +10,9 @@ use tokio::sync::RwLock;
 mod base;
 pub mod error;
 mod keydir;
+mod loadable;
+mod merge_pointer;
+mod record;
 
 pub type Result<T> = std::result::Result<T, error::Error>;
 
@@ -103,7 +107,8 @@ where
     }
 
     pub async fn merge(&self) -> Result<()> {
-        todo!()
+        let mut base = self.base.write().await;
+        base.merge().await
     }
 
     /// provided to allow a manual flush of the internal write buffer.
