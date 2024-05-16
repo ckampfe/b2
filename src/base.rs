@@ -9,20 +9,13 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
-enum ValueOrDelete<V> {
-    Value(V),
-    Delete,
-}
-
 #[derive(Debug)]
-pub(crate) struct Base<K, V>
+pub(crate) struct Base<K>
 where
     K: Eq + Hash + Serialize + DeserializeOwned + Send,
-    V: Serialize + DeserializeOwned + Send,
 {
     db_directory: PathBuf,
     options: Options,
@@ -31,13 +24,11 @@ where
     active_file_id: u64,
     offset: u64,
     tx_id: u128,
-    _v: PhantomData<V>,
 }
 
-impl<K, V> Base<K, V>
+impl<K> Base<K>
 where
     K: Eq + Hash + Serialize + DeserializeOwned + Send,
-    V: Serialize + DeserializeOwned + Send,
 {
     pub(crate) async fn new(db_directory: &Path, options: Options) -> crate::Result<Self> {
         let mut db_file_ids = Self::db_file_ids(db_directory).await?;
@@ -86,11 +77,13 @@ where
             active_file_id,
             offset: 0,
             tx_id: latest_tx_id + 1,
-            _v: PhantomData,
         })
     }
 
-    pub(crate) async fn get(&self, k: &K) -> crate::Result<Option<V>> {
+    pub(crate) async fn get<V: Serialize + DeserializeOwned + Send>(
+        &self,
+        k: &K,
+    ) -> crate::Result<Option<V>> {
         if let Some(entry) = self.keydir.get(k) {
             let mut path = self.db_directory.clone();
             path.push(entry.file_id.to_string());
@@ -115,13 +108,17 @@ where
         }
     }
 
-    pub(crate) async fn insert(&mut self, k: K, v: V) -> crate::Result<()> {
-        self.write(k, ValueOrDelete::Value(v)).await
+    pub(crate) async fn insert<V: Serialize + DeserializeOwned + Send>(
+        &mut self,
+        k: K,
+        v: V,
+    ) -> crate::Result<()> {
+        self.write_insert(k, v).await
     }
 
     pub(crate) async fn remove(&mut self, k: K) -> crate::Result<()> {
         if self.keydir.contains_key(&k) {
-            self.write(k, ValueOrDelete::Delete).await
+            self.write_delete(k).await
         } else {
             Ok(())
         }
@@ -161,7 +158,7 @@ where
         self.active_file.flush().await.map_err(|e| e.into())
     }
 
-    async fn write(&mut self, k: K, v: ValueOrDelete<V>) -> crate::Result<()> {
+    async fn write_delete(&mut self, k: K) -> crate::Result<()> {
         self.tx_id += 1;
         let encoded_tx_id = self.tx_id.to_be_bytes();
         let encoded_key = bincode::serialize(&k).map_err(|e| error::SerializeError {
@@ -169,20 +166,10 @@ where
             source: e,
         })?;
 
-        let encoded_value = match v {
-            ValueOrDelete::Value(ref v) => {
-                bincode::serialize(v).map_err(|e| error::SerializeError {
-                    msg: "unable to serialize to bincode".to_string(),
-                    source: e,
-                })?
-            }
-            ValueOrDelete::Delete => {
-                bincode::serialize(&Tombstone).map_err(|e| error::SerializeError {
-                    msg: "unable to serialize to bincode".to_string(),
-                    source: e,
-                })?
-            }
-        };
+        let encoded_value = bincode::serialize(&Tombstone).map_err(|e| error::SerializeError {
+            msg: "unable to serialize to bincode".to_string(),
+            source: e,
+        })?;
 
         let key_size = encoded_key.len();
 
@@ -204,24 +191,7 @@ where
         self.active_file.write_all(hash).await?;
         self.active_file.write_all(&payload).await?;
 
-        let value_position =
-            self.offset + crate::record::Record::HEADER_SIZE as u64 + key_size as u64;
-
-        let entry = EntryPointer {
-            file_id: self.active_file_id,
-            value_position,
-            value_size: value_size.try_into().unwrap(),
-            tx_id: self.tx_id,
-        };
-
-        match v {
-            ValueOrDelete::Value(_) => {
-                self.keydir.insert(k, entry);
-            }
-            ValueOrDelete::Delete => {
-                self.keydir.remove(&k);
-            }
-        }
+        self.keydir.remove(&k);
 
         let entry_size = crate::record::Record::HEADER_SIZE + key_size + value_size;
 
@@ -253,7 +223,84 @@ where
         }
     }
 
-    // {key, tx_id, record, header_bytes_read, key_size, value_size}
+    async fn write_insert<V: Serialize + DeserializeOwned + Send>(
+        &mut self,
+        k: K,
+        v: V,
+    ) -> crate::Result<()> {
+        self.tx_id += 1;
+        let encoded_tx_id = self.tx_id.to_be_bytes();
+        let encoded_key = bincode::serialize(&k).map_err(|e| error::SerializeError {
+            msg: "unable to serialize to bincode".to_string(),
+            source: e,
+        })?;
+
+        let encoded_value = bincode::serialize(&v).map_err(|e| error::SerializeError {
+            msg: "unable to serialize to bincode".to_string(),
+            source: e,
+        })?;
+
+        let key_size = encoded_key.len();
+
+        let value_size = encoded_value.len();
+
+        let encoded_key_size = (key_size as u32).to_be_bytes();
+        let encoded_value_size = (value_size as u32).to_be_bytes();
+
+        let mut payload = vec![];
+        payload.extend_from_slice(&encoded_tx_id);
+        payload.extend_from_slice(&encoded_key_size);
+        payload.extend_from_slice(&encoded_value_size);
+        payload.extend_from_slice(&encoded_key);
+        payload.extend_from_slice(&encoded_value);
+
+        let hash = blake3::hash(&payload);
+        let hash = hash.as_bytes();
+
+        self.active_file.write_all(hash).await?;
+        self.active_file.write_all(&payload).await?;
+
+        let value_position =
+            self.offset + crate::record::Record::HEADER_SIZE as u64 + key_size as u64;
+
+        let entry = EntryPointer {
+            file_id: self.active_file_id,
+            value_position,
+            value_size: value_size.try_into().unwrap(),
+            tx_id: self.tx_id,
+        };
+
+        self.keydir.insert(k, entry);
+
+        let entry_size = crate::record::Record::HEADER_SIZE + key_size + value_size;
+
+        self.offset += entry_size as u64;
+
+        if self.offset >= self.options.max_file_size_bytes {
+            self.active_file.flush().await?;
+
+            self.active_file_id += 1;
+
+            let mut new_active_file_path = self.db_directory.clone();
+
+            new_active_file_path.push(self.active_file_id.to_string());
+
+            let active_file = tokio::fs::File::options()
+                .append(true)
+                .create_new(true)
+                .open(new_active_file_path)
+                .await?;
+
+            let active_file = tokio::io::BufWriter::new(active_file);
+            self.active_file = active_file;
+        }
+
+        if self.options.flush_behavior == FlushBehavior::AfterEveryWrite {
+            self.flush().await
+        } else {
+            Ok(())
+        }
+    }
 
     async fn db_file_ids(db_directory: &Path) -> crate::Result<Vec<u64>> {
         let mut file_ids = vec![];
@@ -276,11 +323,7 @@ where
     }
 }
 
-impl<
-        K: Eq + Hash + Serialize + DeserializeOwned + Send,
-        V: Serialize + DeserializeOwned + Send,
-    > Drop for Base<K, V>
-{
+impl<K: Eq + Hash + Serialize + DeserializeOwned + Send> Drop for Base<K> {
     fn drop(&mut self) {
         std::thread::scope(|s| {
             s.spawn(|| {

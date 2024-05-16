@@ -60,19 +60,17 @@ pub enum FlushBehavior {
 }
 
 #[derive(Clone, Debug)]
-pub struct B2<K, V>
+pub struct B2<K>
 where
     K: Eq + Hash + Serialize + DeserializeOwned + Send,
-    V: Serialize + DeserializeOwned + Send,
 {
     db_directory: PathBuf,
-    base: Arc<RwLock<Base<K, V>>>,
+    base: Arc<RwLock<Base<K>>>,
 }
 
-impl<K, V> B2<K, V>
+impl<K> B2<K>
 where
     K: Eq + Hash + Serialize + DeserializeOwned + Send,
-    V: Serialize + DeserializeOwned + Send,
 {
     pub async fn new(db_directory: &Path, options: Options) -> Result<Self> {
         let base = Arc::new(RwLock::with_max_readers(
@@ -86,12 +84,12 @@ where
         })
     }
 
-    pub async fn get(&self, key: &K) -> Result<Option<V>> {
+    pub async fn get<V: Serialize + DeserializeOwned + Send>(&self, key: &K) -> Result<Option<V>> {
         let base = self.base.read().await;
         base.get(key).await
     }
 
-    pub async fn insert(&self, k: K, v: V) -> Result<()> {
+    pub async fn insert<V: Serialize + DeserializeOwned + Send>(&self, k: K, v: V) -> Result<()> {
         let mut base = self.base.write().await;
         base.insert(k, v).await
     }
@@ -119,10 +117,9 @@ where
     }
 }
 
-impl<K, V> B2<K, V>
+impl<K> B2<K>
 where
     K: Clone + Eq + Hash + DeserializeOwned + Serialize + Send,
-    V: Serialize + DeserializeOwned + Send,
 {
     pub async fn keys(&self) -> Vec<K> {
         let base = self.base.read().await;
@@ -166,7 +163,7 @@ mod tests {
 
         db.insert(k.clone(), v.clone()).await.unwrap();
 
-        let challenge = db.get(&k).await.unwrap().unwrap();
+        let challenge: String = db.get(&k).await.unwrap().unwrap();
 
         assert_eq!(challenge, v);
     }
@@ -182,13 +179,13 @@ mod tests {
 
         db.insert(k.clone(), v.clone()).await.unwrap();
 
-        let challenge = db.get(&k).await.unwrap().unwrap();
+        let challenge: String = db.get(&k).await.unwrap().unwrap();
 
         assert_eq!(challenge, v);
 
         db.remove(k.clone()).await.unwrap();
 
-        let challenge2 = db.get(&k).await.unwrap();
+        let challenge2: Option<String> = db.get(&k).await.unwrap();
 
         assert_eq!(challenge2, None);
     }
@@ -204,13 +201,13 @@ mod tests {
 
         db.insert(k.clone(), v.clone()).await.unwrap();
 
-        let challenge = db.get(&k).await.unwrap().unwrap();
+        let challenge: String = db.get(&k).await.unwrap().unwrap();
 
         assert_eq!(challenge, v);
 
         drop(db);
 
-        let db: B2<String, String> = B2::new(dir.path(), Options::default()).await.unwrap();
+        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
 
         let challenge: String = db.get(&k).await.unwrap().unwrap();
 
@@ -221,7 +218,7 @@ mod tests {
     async fn delete_then_write() {
         let dir = temp_dir::TempDir::with_prefix("b2").unwrap();
 
-        let db: B2<String, String> = B2::new(dir.path(), Options::default()).await.unwrap();
+        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
 
         let k = "foo".to_string();
         let v = "bar".to_string();
@@ -233,22 +230,51 @@ mod tests {
 
         assert!(!db.contains_key(&k).await);
 
-        let challenge1 = db.get(&k).await.unwrap();
+        let challenge1: Option<String> = db.get(&k).await.unwrap();
 
         assert_eq!(challenge1, None);
 
         db.insert(k.clone(), v.clone()).await.unwrap();
 
-        let challenge2 = db.get(&k).await.unwrap().unwrap();
+        let challenge2: String = db.get(&k).await.unwrap().unwrap();
 
         assert_eq!(challenge2, v);
 
         drop(db);
 
-        let db: B2<String, String> = B2::new(dir.path(), Options::default()).await.unwrap();
+        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
 
-        let challenge3 = db.get(&k).await.unwrap().unwrap();
+        let challenge3: String = db.get(&k).await.unwrap().unwrap();
 
         assert_eq!(challenge3, v)
+    }
+
+    #[tokio::test]
+    async fn varied_value_types_in_the_same_db() {
+        let dir = temp_dir::TempDir::with_prefix("b2").unwrap();
+
+        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+
+        let k1 = "foo".to_string();
+        let k2 = "bar".to_string();
+        let k3 = "baz".to_string();
+
+        // three different types of values in the same db
+        let v1: String = "bar".to_string();
+        let v2: u32 = 99;
+        let v3: [i128; 3] = [-1, -2, -3];
+
+        db.insert(k1.clone(), v1.clone()).await.unwrap();
+        db.insert(k2.clone(), v2.clone()).await.unwrap();
+        db.insert(k3.clone(), v3.clone()).await.unwrap();
+
+        let c1: String = db.get(&k1).await.unwrap().unwrap();
+        assert_eq!(c1, v1);
+
+        let c2: u32 = db.get(&k2).await.unwrap().unwrap();
+        assert_eq!(c2, v2);
+
+        let c3: [i128; 3] = db.get(&k3).await.unwrap().unwrap();
+        assert_eq!(c3, v3);
     }
 }
