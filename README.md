@@ -40,3 +40,4 @@ I have known about Bitcask for a while, and I wanted to learn it by building a w
 - [ ] allow concurrent reading and writing (relax RwLock)
 - [ ] clean up merging code
 - [ ] clean up datamodel around records/entrypointers/mergepointers
+- [ ] more research into how async drop interacts with disk writes/buffer flushes
