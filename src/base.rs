@@ -1,7 +1,7 @@
 use crate::keydir::{EntryPointer, EntryWithLiveness, Keydir, Liveness};
 use crate::loadable::Loadable;
 use crate::merge_pointer::MergePointer;
-use crate::record::Tombstone;
+use crate::record::Record;
 use crate::Options;
 use crate::{error, FlushBehavior};
 use serde::de::DeserializeOwned;
@@ -395,10 +395,7 @@ where
             source: e,
         })?;
 
-        let encoded_value = bincode::serialize(&Tombstone).map_err(|e| error::SerializeError {
-            msg: "unable to serialize to bincode".to_string(),
-            source: e,
-        })?;
+        let encoded_value = Record::tombstone();
 
         let key_size = encoded_key.len();
 
@@ -412,7 +409,7 @@ where
         payload.extend_from_slice(&encoded_key_size);
         payload.extend_from_slice(&encoded_value_size);
         payload.extend_from_slice(&encoded_key);
-        payload.extend_from_slice(&encoded_value);
+        payload.extend_from_slice(encoded_value);
 
         let hash = blake3::hash(&payload);
         let hash = hash.as_bytes();

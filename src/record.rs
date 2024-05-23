@@ -1,15 +1,12 @@
 use std::sync::OnceLock;
 
 use crate::keydir::Liveness;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::de::DeserializeOwned;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-// TODO thse should probably something else.
-// I think they serialize to `[]`, which is probably not good
-#[derive(Serialize, Deserialize)]
-pub(crate) struct Tombstone;
+const TOMBSTONE_BYTES: &[u8] = b"bitcask_tombstone";
 
-pub(crate) static TOMBSTONE: OnceLock<Vec<u8>> = OnceLock::new();
+static TOMBSTONE: OnceLock<Vec<u8>> = OnceLock::new();
 
 /// A record is a "header" and a "body"
 /// The header is (in on-disk and in-memory order):
@@ -64,11 +61,17 @@ impl Record {
     }
 
     pub(crate) fn liveness(&self) -> Liveness {
-        if self.value_bytes() == TOMBSTONE.get_or_init(|| bincode::serialize(&Tombstone).unwrap()) {
+        if self.value_bytes()
+            == TOMBSTONE.get_or_init(|| bincode::serialize(&TOMBSTONE_BYTES).unwrap())
+        {
             Liveness::Deleted
         } else {
             Liveness::Live
         }
+    }
+
+    pub(crate) fn tombstone() -> &'static [u8] {
+        TOMBSTONE.get_or_init(|| bincode::serialize(&TOMBSTONE_BYTES).unwrap())
     }
 
     pub(crate) fn key_bytes(&self) -> &[u8] {
