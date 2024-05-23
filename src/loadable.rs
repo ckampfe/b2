@@ -5,12 +5,12 @@ use tokio::io::AsyncRead;
 pub(crate) trait Loadable<K: Eq + Hash>: PartialOrd + Sized {
     async fn load_latest_entries(
         db_directory: &Path,
-        db_file_ids: Vec<u64>,
+        db_file_ids: &[u64],
     ) -> crate::Result<HashMap<K, Self>> {
-        let mut all_files_entries = vec![];
+        let mut all_files_entries: Vec<HashMap<K, Self>> = vec![];
 
         for file_id in db_file_ids {
-            let file_entries = Self::load_entries_from_file(db_directory, file_id).await?;
+            let file_entries = Self::load_entries_from_file(db_directory, *file_id).await?;
             all_files_entries.push(file_entries);
         }
 

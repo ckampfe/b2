@@ -1,6 +1,7 @@
 use std::num::ParseIntError;
 use thiserror::Error;
 
+#[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("io error occurred")]

@@ -1,3 +1,15 @@
+//! todo:
+//! workout the locking scheme for:
+//! - "regular read" operations (get, etc)
+//! - "regular write" operations (insert, remove)
+//! - "special write" operations (flush, merge)
+//!
+//! my thinking right now is that regular read and regular write operations
+//! can happen concurrently. they should not block each other at all
+//!
+//! special write operations should be exclusive.
+//! they block both regular read *and* regular write operations.
+
 use crate::base::Base;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -73,6 +85,8 @@ where
     K: Eq + Hash + Serialize + DeserializeOwned + Send,
 {
     pub async fn new(db_directory: &Path, options: Options) -> Result<Self> {
+        assert!(options.max_file_size_bytes > 0);
+
         let base = Arc::new(RwLock::with_max_readers(
             Base::new(db_directory, options.clone()).await?,
             options.max_readers,
@@ -276,5 +290,113 @@ mod tests {
 
         let c3: [i128; 3] = db.get(&k3).await.unwrap().unwrap();
         assert_eq!(c3, v3);
+    }
+
+    #[tokio::test]
+    async fn merge_simple() {
+        let dir = temp_dir::TempDir::with_prefix("b2").unwrap();
+
+        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+
+        let k = "some key".to_string();
+
+        let v1 = "v1".to_string();
+        let v2 = "v2".to_string();
+        let v3 = "v3".to_string();
+
+        db.insert(k.clone(), v1.clone()).await.unwrap();
+        assert_eq!(db.get::<String>(&k).await.unwrap().unwrap(), v1);
+        db.insert(k.clone(), v2.clone()).await.unwrap();
+        assert_eq!(db.get::<String>(&k).await.unwrap().unwrap(), v2);
+        db.insert(k.clone(), v3.clone()).await.unwrap();
+        assert_eq!(db.get::<String>(&k).await.unwrap().unwrap(), v3);
+
+        assert_eq!(get_files(&dir.path()).await.len(), 1);
+
+        drop(db);
+
+        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+
+        assert_eq!(get_files(&dir.path()).await.len(), 2);
+
+        assert_eq!(db.get::<String>(&k).await.unwrap().unwrap(), v3);
+
+        db.merge().await.unwrap();
+
+        assert_eq!(get_files(&dir.path()).await.len(), 2);
+
+        assert_eq!(db.get::<String>(&k).await.unwrap().unwrap(), v3);
+    }
+
+    #[tokio::test]
+    async fn merge_delete() {
+        let dir = temp_dir::TempDir::with_prefix("b2").unwrap();
+
+        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+
+        let k = "some key".to_string();
+
+        let v1 = "v1".to_string();
+        let v2 = "v2".to_string();
+        let v3 = "v3".to_string();
+
+        db.insert(k.clone(), v1.clone()).await.unwrap();
+        assert_eq!(db.get::<String>(&k).await.unwrap().unwrap(), v1);
+        db.insert(k.clone(), v2.clone()).await.unwrap();
+        assert_eq!(db.get::<String>(&k).await.unwrap().unwrap(), v2);
+        db.insert(k.clone(), v3.clone()).await.unwrap();
+        assert_eq!(db.get::<String>(&k).await.unwrap().unwrap(), v3);
+
+        db.remove(k.clone()).await.unwrap();
+
+        drop(db);
+
+        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+
+        db.merge().await.unwrap();
+
+        assert_eq!(db.contains_key(&k).await, false);
+
+        assert_eq!(get_files(&dir.path()).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn merge_same_key() {
+        let dir = temp_dir::TempDir::with_prefix("b2").unwrap();
+
+        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+
+        let k = "some key".to_string();
+
+        let v1 = "v1".to_string();
+        let v2 = "v2".to_string();
+
+        db.insert(k.clone(), v1.clone()).await.unwrap();
+
+        drop(db);
+
+        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+
+        db.insert(k.clone(), v2.clone()).await.unwrap();
+
+        db.merge().await.unwrap();
+
+        assert_eq!(db.get::<String>(&k).await.unwrap().unwrap(), v2);
+
+        assert_eq!(get_files(&dir.path()).await.len(), 1);
+    }
+
+    async fn get_files<P: AsRef<Path>>(dir: &P) -> Vec<PathBuf> {
+        let mut s = tokio::fs::read_dir(dir).await.unwrap();
+
+        let mut entries = vec![];
+
+        while let Some(e) = s.next_entry().await.unwrap() {
+            if e.path().is_file() {
+                entries.push(e.path());
+            }
+        }
+
+        entries
     }
 }

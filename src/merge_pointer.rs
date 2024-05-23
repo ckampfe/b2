@@ -12,15 +12,8 @@ pub(crate) struct MergePointer {
     pub(crate) liveness: Liveness,
     pub(crate) file_id: u64,
     pub(crate) tx_id: u128,
-    /// the absolute position of the beginning of the body section of this record in the file
-    pub(crate) body_position: u64,
-    /// the length of the body
-    pub(crate) body_size: u64,
-    // raw_record: Vec<u8>,
-    // todo this should be something smaller, I think it's
-    // a fixed-length thing that is just HEADER_LENGTH.
-    // a u8?
-    // hash_size + tx_id_size + key_size_size + value_size_size
+    pub(crate) record_offset: u64,
+    pub(crate) record_size: u64,
     pub(crate) key_size: u32,
     pub(crate) value_size: u32,
 }
@@ -56,21 +49,18 @@ impl<K: Eq + Hash + DeserializeOwned> Loadable<K> for MergePointer {
 
         let liveness = record.liveness();
 
-        let body_position = *offset + crate::record::Record::HEADER_SIZE as u64;
+        let out = MergePointer {
+            liveness,
+            file_id,
+            tx_id: record.tx_id(),
+            record_offset: *offset,
+            record_size: record.len() as u64,
+            key_size: record.key_size(),
+            value_size: record.value_size(),
+        };
 
         *offset += record.len() as u64;
 
-        Ok(Some((
-            key,
-            MergePointer {
-                liveness,
-                file_id,
-                tx_id: record.tx_id(),
-                body_position,
-                body_size: record.body_len().try_into().unwrap(),
-                key_size: record.key_size(),
-                value_size: record.value_size(),
-            },
-        )))
+        Ok(Some((key, out)))
     }
 }
