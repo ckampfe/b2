@@ -314,50 +314,26 @@ where
         v: V,
     ) -> crate::Result<()> {
         self.tx_id += 1;
-        let encoded_tx_id = self.tx_id.to_be_bytes();
-        let encoded_key = bincode::serialize(&k).map_err(|e| error::SerializeError {
-            msg: "unable to serialize to bincode".to_string(),
-            source: e,
-        })?;
 
-        let encoded_value = bincode::serialize(&v).map_err(|e| error::SerializeError {
-            msg: "unable to serialize to bincode".to_string(),
-            source: e,
-        })?;
+        let record = Record::new(&k, &v, self.tx_id)?;
 
-        let key_size = encoded_key.len();
-
-        let value_size = encoded_value.len();
-
-        let encoded_key_size = (key_size as u32).to_be_bytes();
-        let encoded_value_size = (value_size as u32).to_be_bytes();
-
-        let mut payload = vec![];
-        payload.extend_from_slice(&encoded_tx_id);
-        payload.extend_from_slice(&encoded_key_size);
-        payload.extend_from_slice(&encoded_value_size);
-        payload.extend_from_slice(&encoded_key);
-        payload.extend_from_slice(&encoded_value);
-
-        let hash = blake3::hash(&payload);
-        let hash = hash.as_bytes();
-
-        self.active_file.write_all(hash).await?;
-        self.active_file.write_all(&payload).await?;
+        self.active_file.write_all(&record).await?;
 
         let value_position =
-            self.offset + crate::record::Record::HEADER_SIZE as u64 + key_size as u64;
+            self.offset + crate::record::Record::HEADER_SIZE as u64 + record.key_size() as u64;
 
         let entry = EntryPointer {
             file_id: self.active_file_id,
             value_position,
-            value_size: value_size.try_into().unwrap(),
+            value_size: record.value_size(),
             tx_id: self.tx_id,
         };
 
         self.keydir.insert(k, entry);
 
-        let entry_size = crate::record::Record::HEADER_SIZE + key_size + value_size;
+        let entry_size = crate::record::Record::HEADER_SIZE
+            + record.key_size() as usize
+            + record.value_size() as usize;
 
         self.offset += entry_size as u64;
 
@@ -389,37 +365,18 @@ where
 
     async fn write_delete(&mut self, k: K) -> crate::Result<()> {
         self.tx_id += 1;
-        let encoded_tx_id = self.tx_id.to_be_bytes();
-        let encoded_key = bincode::serialize(&k).map_err(|e| error::SerializeError {
-            msg: "unable to serialize to bincode".to_string(),
-            source: e,
-        })?;
 
-        let encoded_value = Record::tombstone();
+        let v = Record::tombstone();
 
-        let key_size = encoded_key.len();
+        let record = Record::new(&k, &v, self.tx_id)?;
 
-        let value_size = encoded_value.len();
-
-        let encoded_key_size = (key_size as u32).to_be_bytes();
-        let encoded_value_size = (value_size as u32).to_be_bytes();
-
-        let mut payload = vec![];
-        payload.extend_from_slice(&encoded_tx_id);
-        payload.extend_from_slice(&encoded_key_size);
-        payload.extend_from_slice(&encoded_value_size);
-        payload.extend_from_slice(&encoded_key);
-        payload.extend_from_slice(encoded_value);
-
-        let hash = blake3::hash(&payload);
-        let hash = hash.as_bytes();
-
-        self.active_file.write_all(hash).await?;
-        self.active_file.write_all(&payload).await?;
+        self.active_file.write_all(&record).await?;
 
         self.keydir.remove(&k);
 
-        let entry_size = crate::record::Record::HEADER_SIZE + key_size + value_size;
+        let entry_size = crate::record::Record::HEADER_SIZE
+            + record.key_size() as usize
+            + record.value_size() as usize;
 
         self.offset += entry_size as u64;
 

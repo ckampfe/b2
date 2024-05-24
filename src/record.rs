@@ -1,19 +1,18 @@
-use std::sync::OnceLock;
-
-use crate::keydir::Liveness;
-use serde::de::DeserializeOwned;
+use crate::{error, keydir::Liveness};
+use serde::{de::DeserializeOwned, Serialize};
+use std::{ops::Deref, sync::OnceLock};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 const TOMBSTONE_BYTES: &[u8] = b"bitcask_tombstone";
 
-static TOMBSTONE: OnceLock<Vec<u8>> = OnceLock::new();
+static SERIALIZED_TOMBSTONE: OnceLock<Vec<u8>> = OnceLock::new();
 
 /// A record is a "header" and a "body"
 /// The header is (in on-disk and in-memory order):
-/// - hash (the paper calls this `crc`)
-/// - tx_id (the paper calls this `tstamp`)
-/// - key_size
-/// - value_size
+/// - hash (the paper calls this `crc`) (32 bytes)
+/// - tx_id (the paper calls this `tstamp`) (16 bytes)
+/// - key_size (4 bytes)
+/// - value_size (4 bytes)
 ///
 /// The body is (also in on-disk and in-memory order):
 /// - key
@@ -22,10 +21,62 @@ pub(crate) struct Record {
     buf: Vec<u8>,
 }
 
+impl Deref for Record {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.buf
+    }
+}
+
 // crate-public impls
 impl Record {
     pub(crate) const HEADER_SIZE: usize =
         Record::HASH_SIZE + Record::TX_ID_SIZE + Record::KEY_SIZE_SIZE + Record::VALUE_SIZE_SIZE;
+
+    pub(crate) fn new<K: Serialize, V: Serialize>(
+        k: &K,
+        v: &V,
+        tx_id: u128,
+    ) -> crate::Result<Self> {
+        let encoded_tx_id = tx_id.to_be_bytes();
+
+        let encoded_key = bincode::serialize(k).map_err(|e| error::SerializeError {
+            msg: "unable to serialize to bincode".to_string(),
+            source: e,
+        })?;
+
+        let encoded_value = bincode::serialize(v).map_err(|e| error::SerializeError {
+            msg: "unable to serialize to bincode".to_string(),
+            source: e,
+        })?;
+
+        let key_size = encoded_key.len();
+        let value_size = encoded_value.len();
+        let body_size = key_size + value_size;
+
+        let encoded_key_size = (key_size as u32).to_be_bytes();
+        let encoded_value_size = (value_size as u32).to_be_bytes();
+
+        let mut buf = Vec::with_capacity(Self::HEADER_SIZE + body_size);
+        // header
+        // dummy hash bytes, added back in at the end...
+        buf.extend_from_slice(&[0u8; blake3::OUT_LEN]);
+        // rest of header
+        buf.extend_from_slice(&encoded_tx_id);
+        buf.extend_from_slice(&encoded_key_size);
+        buf.extend_from_slice(&encoded_value_size);
+        // body
+        buf.extend_from_slice(&encoded_key);
+        buf.extend_from_slice(&encoded_value);
+
+        let hash = blake3::hash(&buf[32..]);
+        let hash = hash.as_bytes();
+        // ...and finally set the first 32 bytes to the hash
+        buf[..32].copy_from_slice(hash);
+
+        Ok(Record { buf })
+    }
 
     pub(crate) async fn read_from<R: AsyncRead + Unpin>(
         reader: &mut tokio::io::BufReader<R>,
@@ -62,7 +113,7 @@ impl Record {
 
     pub(crate) fn liveness(&self) -> Liveness {
         if self.value_bytes()
-            == TOMBSTONE.get_or_init(|| bincode::serialize(&TOMBSTONE_BYTES).unwrap())
+            == SERIALIZED_TOMBSTONE.get_or_init(|| bincode::serialize(&TOMBSTONE_BYTES).unwrap())
         {
             Liveness::Deleted
         } else {
@@ -71,7 +122,7 @@ impl Record {
     }
 
     pub(crate) fn tombstone() -> &'static [u8] {
-        TOMBSTONE.get_or_init(|| bincode::serialize(&TOMBSTONE_BYTES).unwrap())
+        TOMBSTONE_BYTES
     }
 
     pub(crate) fn key_bytes(&self) -> &[u8] {
@@ -88,10 +139,6 @@ impl Record {
 
     pub(crate) fn len(&self) -> usize {
         self.buf.len()
-    }
-
-    pub(crate) fn body_len(&self) -> usize {
-        self.body().len()
     }
 
     pub(crate) fn tx_id(&self) -> u128 {

@@ -42,4 +42,10 @@ I have known about Bitcask for a while, and I wanted to learn it by building a w
 - [ ] clean up datamodel around records/entrypointers/mergepointers
 - [ ] more research into how async drop interacts with disk writes/buffer flushes
 - [x] investigate a better, less ambiguous tombstone value
-- [ ] move record write_insert and write_delete into Record
+- [x] move more of write_insert and write_delete into Record
+- [ ] improve error contexts reported to callers (e.g. with `snafu` or improving use of `thiserror`)
+- [ ] error handling and reporting in the event of a corrupt record
+- [ ] investigate allowing the access of old values
+- [ ] optimize layout of EntryPointer size, file_id to u32, value_position to u32?, tx_id to `time::Time`
+- [ ] investigate restricting key size to u16
+- [ ] use crc32 instead of blake3
