@@ -1,3 +1,4 @@
+use crate::keydir::FileId;
 use std::hash::Hash;
 use std::{collections::HashMap, path::Path};
 use tokio::io::AsyncRead;
@@ -5,7 +6,7 @@ use tokio::io::AsyncRead;
 pub(crate) trait Loadable<K: Eq + Hash>: PartialOrd + Sized {
     async fn load_latest_entries(
         db_directory: &Path,
-        db_file_ids: &[u64],
+        db_file_ids: &[FileId],
     ) -> crate::Result<HashMap<K, Self>> {
         let mut all_files_entries: Vec<HashMap<K, Self>> = vec![];
 
@@ -33,7 +34,7 @@ pub(crate) trait Loadable<K: Eq + Hash>: PartialOrd + Sized {
 
     async fn load_entries_from_file(
         db_directory: &Path,
-        file_id: u64,
+        file_id: FileId,
     ) -> crate::Result<HashMap<K, Self>> {
         let mut path = db_directory.to_owned();
 
@@ -59,7 +60,7 @@ pub(crate) trait Loadable<K: Eq + Hash>: PartialOrd + Sized {
     async fn read<R: AsyncRead + Unpin>(
         reader: &mut tokio::io::BufReader<R>,
         offset: &mut u64,
-        file_id: u64,
+        file_id: FileId,
     ) -> crate::Result<Option<(K, Self)>>
     where
         Self: Sized;

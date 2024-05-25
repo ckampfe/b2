@@ -1,5 +1,6 @@
 use crate::{error, keydir::Liveness};
 use serde::{de::DeserializeOwned, Serialize};
+use std::ops::{Add, AddAssign};
 use std::{ops::Deref, sync::OnceLock};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -37,7 +38,7 @@ impl Record {
     pub(crate) fn new<K: Serialize, V: Serialize>(
         k: &K,
         v: &V,
-        tx_id: u128,
+        tx_id: TxId,
     ) -> crate::Result<Self> {
         let encoded_tx_id = tx_id.to_be_bytes();
 
@@ -55,8 +56,8 @@ impl Record {
         let value_size = encoded_value.len();
         let body_size = key_size + value_size;
 
-        let encoded_key_size = (key_size as u32).to_be_bytes();
-        let encoded_value_size = (value_size as u32).to_be_bytes();
+        let encoded_key_size = KeySize(key_size as u16).0.to_be_bytes();
+        let encoded_value_size = ValueSize(value_size as u32).0.to_be_bytes();
 
         let mut buf = Vec::with_capacity(Self::HEADER_SIZE + body_size);
         // header
@@ -87,8 +88,8 @@ impl Record {
 
         reader.read_exact(&mut record.buf).await?;
 
-        let key_size_usize: usize = record.key_size().try_into().unwrap();
-        let value_size_usize: usize = record.value_size().try_into().unwrap();
+        let key_size_usize: usize = record.key_size().0.into();
+        let value_size_usize: usize = record.value_size().0.try_into().unwrap();
         let body_size: usize = key_size_usize + value_size_usize;
 
         record.buf.resize(record.buf.len() + body_size, 0);
@@ -127,13 +128,13 @@ impl Record {
 
     pub(crate) fn key_bytes(&self) -> &[u8] {
         let start = 0;
-        let end = self.key_size() as usize;
+        let end = self.key_size().0 as usize;
         &self.body()[start..end]
     }
 
     pub(crate) fn value_bytes(&self) -> &[u8] {
-        let start = self.key_size() as usize;
-        let end = start + self.value_size() as usize;
+        let start = self.key_size().0 as usize;
+        let end = start + self.value_size().0 as usize;
         &self.body()[start..end]
     }
 
@@ -141,25 +142,29 @@ impl Record {
         self.buf.len()
     }
 
-    pub(crate) fn tx_id(&self) -> u128 {
-        u128::from_be_bytes(self.tx_id_bytes().try_into().unwrap())
+    pub(crate) fn tx_id(&self) -> TxId {
+        u128::from_be_bytes(self.tx_id_bytes().try_into().unwrap()).into()
     }
 
-    pub(crate) fn key_size(&self) -> u32 {
-        u32::from_be_bytes(self.key_size_bytes().try_into().unwrap())
+    pub(crate) fn key_size(&self) -> KeySize {
+        KeySize(u16::from_be_bytes(
+            self.key_size_bytes().try_into().unwrap(),
+        ))
     }
 
-    pub(crate) fn value_size(&self) -> u32 {
-        u32::from_be_bytes(self.value_size_bytes().try_into().unwrap())
+    pub(crate) fn value_size(&self) -> ValueSize {
+        ValueSize(u32::from_be_bytes(
+            self.value_size_bytes().try_into().unwrap(),
+        ))
     }
 }
 
 // private impls
 impl Record {
     const HASH_SIZE: usize = std::mem::size_of::<u32>();
-    const TX_ID_SIZE: usize = std::mem::size_of::<u128>();
-    const KEY_SIZE_SIZE: usize = std::mem::size_of::<u32>();
-    const VALUE_SIZE_SIZE: usize = std::mem::size_of::<u32>();
+    const TX_ID_SIZE: usize = std::mem::size_of::<TxId>();
+    const KEY_SIZE_SIZE: usize = std::mem::size_of::<KeySize>();
+    const VALUE_SIZE_SIZE: usize = std::mem::size_of::<ValueSize>();
 
     fn header(&self) -> &[u8] {
         &self.buf[..Self::HEADER_SIZE]
@@ -201,5 +206,40 @@ impl Record {
         let start = Self::HASH_SIZE + Self::TX_ID_SIZE + Self::KEY_SIZE_SIZE;
         let end = start + Self::VALUE_SIZE_SIZE;
         &self.header()[start..end]
+    }
+}
+
+#[derive(PartialEq)]
+pub(crate) struct KeySize(pub(crate) u16);
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct ValueSize(pub(crate) u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct TxId(u128);
+
+impl TxId {
+    pub(crate) fn to_be_bytes(self) -> [u8; 16] {
+        self.0.to_be_bytes()
+    }
+}
+
+impl From<u128> for TxId {
+    fn from(value: u128) -> Self {
+        Self(value)
+    }
+}
+
+impl Add<u128> for TxId {
+    type Output = Self;
+
+    fn add(self, rhs: u128) -> Self::Output {
+        Self(self.0 + rhs)
+    }
+}
+
+impl AddAssign<u128> for TxId {
+    fn add_assign(&mut self, rhs: u128) {
+        self.0 += rhs
     }
 }

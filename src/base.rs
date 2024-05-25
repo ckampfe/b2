@@ -1,7 +1,7 @@
-use crate::keydir::{EntryPointer, EntryWithLiveness, Keydir, Liveness};
+use crate::keydir::{EntryPointer, EntryWithLiveness, FileId, Keydir, Liveness};
 use crate::loadable::Loadable;
 use crate::merge_pointer::MergePointer;
-use crate::record::Record;
+use crate::record::{Record, TxId};
 use crate::Options;
 use crate::{error, FlushBehavior};
 use serde::de::DeserializeOwned;
@@ -21,9 +21,9 @@ where
     options: Options,
     keydir: Keydir<K>,
     active_file: tokio::io::BufWriter<tokio::fs::File>,
-    active_file_id: u64,
+    active_file_id: FileId,
     offset: u64,
-    tx_id: u128,
+    tx_id: TxId,
 }
 
 // public impls
@@ -36,7 +36,9 @@ where
 
         db_file_ids.sort();
 
-        let latest_file_id = db_file_ids.last().unwrap_or(&0);
+        let file_id_zero: FileId = 0.into();
+
+        let latest_file_id = db_file_ids.last().unwrap_or(&file_id_zero);
 
         let active_file_id = latest_file_id + 1;
 
@@ -57,7 +59,7 @@ where
 
         let keydir = Keydir::new(all_entries);
 
-        let latest_tx_id = keydir.latest_tx_id().unwrap_or(0);
+        let latest_tx_id = keydir.latest_tx_id().unwrap_or(0.into());
 
         let mut active_file_path = db_directory.to_owned();
         active_file_path.push(active_file_id.to_string());
@@ -94,7 +96,7 @@ where
             f.seek(std::io::SeekFrom::Start(entry.value_position))
                 .await?;
 
-            let mut buf = vec![0u8; entry.value_size as usize];
+            let mut buf = vec![0u8; entry.value_size.0 as usize];
 
             f.read_exact(&mut buf).await?;
 
@@ -256,8 +258,9 @@ where
 
             assert!(bytes_read == merge_pointer.record_size);
 
-            let value_position =
-                offset + crate::record::Record::HEADER_SIZE as u64 + merge_pointer.key_size as u64;
+            let value_position = offset
+                + crate::record::Record::HEADER_SIZE as u64
+                + merge_pointer.key_size.0 as u64;
 
             offset += merge_pointer.record_size;
 
@@ -320,7 +323,7 @@ where
         self.active_file.write_all(&record).await?;
 
         let value_position =
-            self.offset + crate::record::Record::HEADER_SIZE as u64 + record.key_size() as u64;
+            self.offset + crate::record::Record::HEADER_SIZE as u64 + record.key_size().0 as u64;
 
         let entry = EntryPointer {
             file_id: self.active_file_id,
@@ -332,8 +335,8 @@ where
         self.keydir.insert(k, entry);
 
         let entry_size = crate::record::Record::HEADER_SIZE
-            + record.key_size() as usize
-            + record.value_size() as usize;
+            + record.key_size().0 as usize
+            + record.value_size().0 as usize;
 
         self.offset += entry_size as u64;
 
@@ -375,8 +378,8 @@ where
         self.keydir.remove(&k);
 
         let entry_size = crate::record::Record::HEADER_SIZE
-            + record.key_size() as usize
-            + record.value_size() as usize;
+            + record.key_size().0 as usize
+            + record.value_size().0 as usize;
 
         self.offset += entry_size as u64;
 
@@ -406,7 +409,7 @@ where
         }
     }
 
-    async fn all_db_file_ids(db_directory: &Path) -> crate::Result<Vec<u64>> {
+    async fn all_db_file_ids(db_directory: &Path) -> crate::Result<Vec<FileId>> {
         let mut file_ids = vec![];
 
         let mut dir_reader = tokio::fs::read_dir(db_directory).await?;
@@ -426,7 +429,7 @@ where
         Ok(file_ids)
     }
 
-    async fn inactive_db_file_ids(&self) -> crate::Result<Vec<u64>> {
+    async fn inactive_db_file_ids(&self) -> crate::Result<Vec<FileId>> {
         let mut db_file_ids = Self::all_db_file_ids(&self.db_directory).await?;
 
         db_file_ids.retain(|file_id| *file_id != self.active_file_id);

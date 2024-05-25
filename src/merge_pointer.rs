@@ -1,5 +1,6 @@
-use crate::keydir::Liveness;
+use crate::keydir::{FileId, Liveness};
 use crate::loadable::Loadable;
+use crate::record::{KeySize, TxId, ValueSize};
 use serde::de::DeserializeOwned;
 use std::hash::Hash;
 use tokio::io::AsyncRead;
@@ -10,12 +11,12 @@ use tokio::io::AsyncRead;
 pub(crate) struct MergePointer {
     /// whether the data is an insert or a delete
     pub(crate) liveness: Liveness,
-    pub(crate) file_id: u64,
-    pub(crate) tx_id: u128,
+    pub(crate) file_id: FileId,
+    pub(crate) tx_id: TxId,
     pub(crate) record_offset: u64,
     pub(crate) record_size: u64,
-    pub(crate) key_size: u32,
-    pub(crate) value_size: u32,
+    pub(crate) key_size: KeySize,
+    pub(crate) value_size: ValueSize,
 }
 
 impl PartialOrd for MergePointer {
@@ -28,7 +29,7 @@ impl<K: Eq + Hash + DeserializeOwned> Loadable<K> for MergePointer {
     async fn read<R: AsyncRead + Unpin>(
         reader: &mut tokio::io::BufReader<R>,
         offset: &mut u64,
-        file_id: u64,
+        file_id: FileId,
     ) -> crate::Result<Option<(K, Self)>> {
         let record = match crate::record::Record::read_from(reader).await {
             Ok(record) => record,
