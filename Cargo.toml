@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 bincode = "1"
-blake3 = "1"
+crc32fast = "1"
 thiserror = "1"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

@@ -9,7 +9,7 @@ static SERIALIZED_TOMBSTONE: OnceLock<Vec<u8>> = OnceLock::new();
 
 /// A record is a "header" and a "body"
 /// The header is (in on-disk and in-memory order):
-/// - hash (the paper calls this `crc`) (32 bytes)
+/// - hash (the paper calls this `crc`) (4 bytes)
 /// - tx_id (the paper calls this `tstamp`) (16 bytes)
 /// - key_size (4 bytes)
 /// - value_size (4 bytes)
@@ -61,7 +61,7 @@ impl Record {
         let mut buf = Vec::with_capacity(Self::HEADER_SIZE + body_size);
         // header
         // dummy hash bytes, added back in at the end...
-        buf.extend_from_slice(&[0u8; blake3::OUT_LEN]);
+        buf.extend_from_slice(&[0u8; Self::HASH_SIZE]);
         // rest of header
         buf.extend_from_slice(&encoded_tx_id);
         buf.extend_from_slice(&encoded_key_size);
@@ -70,10 +70,10 @@ impl Record {
         buf.extend_from_slice(&encoded_key);
         buf.extend_from_slice(&encoded_value);
 
-        let hash = blake3::hash(&buf[32..]);
-        let hash = hash.as_bytes();
+        let hash = crc32fast::hash(&buf[Self::HASH_SIZE..]);
+        let hash_bytes = hash.to_be_bytes();
         // ...and finally set the first 32 bytes to the hash
-        buf[..32].copy_from_slice(hash);
+        buf[..Self::HASH_SIZE].copy_from_slice(&hash_bytes);
 
         Ok(Record { buf })
     }
@@ -156,7 +156,7 @@ impl Record {
 
 // private impls
 impl Record {
-    const HASH_SIZE: usize = blake3::OUT_LEN;
+    const HASH_SIZE: usize = std::mem::size_of::<u32>();
     const TX_ID_SIZE: usize = std::mem::size_of::<u128>();
     const KEY_SIZE_SIZE: usize = std::mem::size_of::<u32>();
     const VALUE_SIZE_SIZE: usize = std::mem::size_of::<u32>();
@@ -169,13 +169,13 @@ impl Record {
         &self.buf[Self::HEADER_SIZE..]
     }
 
-    fn hash_read_from_disk(&self) -> blake3::Hash {
-        let hash = &self.header()[0..Record::HASH_SIZE];
-        blake3::Hash::from_bytes(hash.try_into().unwrap())
+    fn hash_read_from_disk(&self) -> u32 {
+        let hash_bytes = &self.header()[..Self::HASH_SIZE];
+        u32::from_be_bytes(hash_bytes.try_into().unwrap())
     }
 
-    fn computed_hash(&self) -> blake3::Hash {
-        let mut hasher = blake3::Hasher::new();
+    fn computed_hash(&self) -> u32 {
+        let mut hasher = crc32fast::Hasher::new();
 
         hasher.update(self.tx_id_bytes());
         hasher.update(self.key_size_bytes());
@@ -186,20 +186,20 @@ impl Record {
     }
 
     fn tx_id_bytes(&self) -> &[u8] {
-        let start = Record::HASH_SIZE;
-        let end = start + Record::TX_ID_SIZE;
+        let start = Self::HASH_SIZE;
+        let end = start + Self::TX_ID_SIZE;
         &self.header()[start..end]
     }
 
     fn key_size_bytes(&self) -> &[u8] {
-        let start = Record::HASH_SIZE + Record::TX_ID_SIZE;
-        let end = start + Record::KEY_SIZE_SIZE;
+        let start = Self::HASH_SIZE + Self::TX_ID_SIZE;
+        let end = start + Self::KEY_SIZE_SIZE;
         &self.header()[start..end]
     }
 
     fn value_size_bytes(&self) -> &[u8] {
-        let start = Record::HASH_SIZE + Record::TX_ID_SIZE + Record::KEY_SIZE_SIZE;
-        let end = start + Record::VALUE_SIZE_SIZE;
+        let start = Self::HASH_SIZE + Self::TX_ID_SIZE + Self::KEY_SIZE_SIZE;
+        let end = start + Self::VALUE_SIZE_SIZE;
         &self.header()[start..end]
     }
 }
