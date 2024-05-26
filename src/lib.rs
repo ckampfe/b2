@@ -33,9 +33,10 @@ pub type Result<T> = std::result::Result<T, error::Error>;
 pub struct Options {
     /// 256 MiB by default
     pub max_file_size_bytes: u64,
-    /// defaults to `u32::MAX >> 3`,
+    /// defaults to 1024.
+    /// max possible is `u32::MAX >> 3`,
     /// as per <https://docs.rs/tokio/latest/tokio/sync/struct.RwLock.html#method.with_max_readers>
-    pub max_readers: u32,
+    pub max_concurrent_readers: u32,
     /// when to flush the database's in-memory write buffer
     pub flush_behavior: FlushBehavior,
 }
@@ -44,7 +45,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             max_file_size_bytes: 2u64.pow(28),
-            max_readers: 536870911,
+            max_concurrent_readers: 1024,
             flush_behavior: FlushBehavior::default(),
         }
     }
@@ -92,7 +93,7 @@ where
 
         let base = Arc::new(RwLock::with_max_readers(
             Base::new(db_directory, options.clone()).await?,
-            options.max_readers,
+            options.max_concurrent_readers,
         ));
 
         Ok(Self {
