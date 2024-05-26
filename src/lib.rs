@@ -30,11 +30,12 @@ pub type Result<T> = std::result::Result<T, error::Error>;
 
 #[derive(Clone, Debug)]
 pub struct Options {
-    // 256 MiB by default
+    /// 256 MiB by default
     pub max_file_size_bytes: u64,
-    /// defaults to u32::max >> 3,
-    /// as per https://docs.rs/tokio/latest/tokio/sync/struct.RwLock.html#method.with_max_readers
+    /// defaults to `u32::MAX >> 3`,
+    /// as per <https://docs.rs/tokio/latest/tokio/sync/struct.RwLock.html#method.with_max_readers>
     pub max_readers: u32,
+    /// when to flush the database's in-memory write buffer
     pub flush_behavior: FlushBehavior,
 }
 
@@ -57,7 +58,7 @@ impl Default for Options {
 /// This is more durable, but gives up write throughput.
 ///
 /// `WhenFull` means the buffer is flushed to disk when full.
-/// This is faster, but gives up some durability.
+/// This offers higher throughput at the expense of durability.
 ///
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum FlushBehavior {
@@ -99,26 +100,31 @@ where
         })
     }
 
+    /// Get the value for a given key, if it exists.
     pub async fn get<V: Serialize + DeserializeOwned + Send>(&self, key: &K) -> Result<Option<V>> {
         let base = self.base.read().await;
         base.get(key).await
     }
 
+    /// Insert the the given key and value, overwriting any previous values.
     pub async fn insert<V: Serialize + DeserializeOwned + Send>(&self, k: K, v: V) -> Result<()> {
         let mut base = self.base.write().await;
         base.insert(k, v).await
     }
 
+    /// Delete a given key and value.
     pub async fn remove(&self, k: K) -> Result<()> {
         let mut base = self.base.write().await;
         base.remove(k).await
     }
 
+    /// Returns true if the database has any non-delete entry for the given key.
     pub async fn contains_key(&self, k: &K) -> bool {
         let base = self.base.read().await;
         base.contains_key(k)
     }
 
+    /// Merge database files so only the most recent writes exist.
     pub async fn merge(&self) -> Result<()> {
         let mut base = self.base.write().await;
         base.merge().await
@@ -136,6 +142,7 @@ impl<K> B2<K>
 where
     K: Clone + Eq + Hash + DeserializeOwned + Serialize + Send,
 {
+    /// Return a list of all keys that have live (non-deleted) values.
     pub async fn keys(&self) -> Vec<K> {
         let base = self.base.read().await;
         base.keys().cloned().collect()

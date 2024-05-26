@@ -156,11 +156,6 @@ where
     /// ### no dangling files
     /// - all database files SHALL have a size > 0 bytes.
     pub(crate) async fn merge(&mut self) -> crate::Result<()> {
-        // TODO
-        // take current keydir into account when determining whether to keep
-        // a given merge record.
-        // when writing a merge record, only write it if it does not appear in the
-        // active file
         let mut inactive_db_files = self.inactive_db_file_ids().await?;
 
         let merge_pointers = <MergePointer as Loadable<K>>::load_latest_entries(
@@ -173,7 +168,6 @@ where
             .into_iter()
             .filter(|(_key, merge_pointer)| merge_pointer.liveness == Liveness::Live);
 
-        // let mut current_write_file = tokio::io::BufWriter::new(write_file);
         let mut current_write_file: Option<tokio::io::BufWriter<tokio::fs::File>> = None;
 
         let mut offset = 0;
