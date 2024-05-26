@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! todo:
 //! workout the locking scheme for:
 //! - "regular read" operations (get, etc)
