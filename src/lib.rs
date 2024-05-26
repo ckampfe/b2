@@ -84,7 +84,8 @@ impl<K> B2<K>
 where
     K: Eq + Hash + Serialize + DeserializeOwned + Send,
 {
-    pub async fn new(db_directory: &Path, options: Options) -> Result<Self> {
+    /// Opens the database in the given directory, creating it if it does not exist.
+    pub async fn open(db_directory: &Path, options: Options) -> Result<Self> {
         assert!(options.max_file_size_bytes > 0);
 
         let base = Arc::new(RwLock::with_max_readers(
@@ -170,7 +171,7 @@ mod tests {
     async fn simple_roundtrip() {
         let dir = temp_dir::TempDir::with_prefix("b2").unwrap();
 
-        let db = B2::new(dir.path(), Options::default()).await.unwrap();
+        let db = B2::open(dir.path(), Options::default()).await.unwrap();
 
         let k = "foo".to_string();
         let v = "bar".to_string();
@@ -186,7 +187,7 @@ mod tests {
     async fn simple_write_then_delete() {
         let dir = temp_dir::TempDir::with_prefix("b2").unwrap();
 
-        let db = B2::new(dir.path(), Options::default()).await.unwrap();
+        let db = B2::open(dir.path(), Options::default()).await.unwrap();
 
         let k = "foo".to_string();
         let v = "bar".to_string();
@@ -208,7 +209,7 @@ mod tests {
     async fn simple_write_then_drop_then_load() {
         let dir = temp_dir::TempDir::with_prefix("b2").unwrap();
 
-        let db = B2::new(dir.path(), Options::default()).await.unwrap();
+        let db = B2::open(dir.path(), Options::default()).await.unwrap();
 
         let k = "foo".to_string();
         let v = "bar".to_string();
@@ -221,7 +222,7 @@ mod tests {
 
         drop(db);
 
-        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+        let db: B2<String> = B2::open(dir.path(), Options::default()).await.unwrap();
 
         let challenge: String = db.get(&k).await.unwrap().unwrap();
 
@@ -232,7 +233,7 @@ mod tests {
     async fn delete_then_write() {
         let dir = temp_dir::TempDir::with_prefix("b2").unwrap();
 
-        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+        let db: B2<String> = B2::open(dir.path(), Options::default()).await.unwrap();
 
         let k = "foo".to_string();
         let v = "bar".to_string();
@@ -256,7 +257,7 @@ mod tests {
 
         drop(db);
 
-        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+        let db: B2<String> = B2::open(dir.path(), Options::default()).await.unwrap();
 
         let challenge3: String = db.get(&k).await.unwrap().unwrap();
 
@@ -267,7 +268,7 @@ mod tests {
     async fn varied_value_types_in_the_same_db() {
         let dir = temp_dir::TempDir::with_prefix("b2").unwrap();
 
-        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+        let db: B2<String> = B2::open(dir.path(), Options::default()).await.unwrap();
 
         let k1 = "foo".to_string();
         let k2 = "bar".to_string();
@@ -296,7 +297,7 @@ mod tests {
     async fn merge_simple() {
         let dir = temp_dir::TempDir::with_prefix("b2").unwrap();
 
-        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+        let db: B2<String> = B2::open(dir.path(), Options::default()).await.unwrap();
 
         let k = "some key".to_string();
 
@@ -315,7 +316,7 @@ mod tests {
 
         drop(db);
 
-        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+        let db: B2<String> = B2::open(dir.path(), Options::default()).await.unwrap();
 
         assert_eq!(get_files(&dir.path()).await.len(), 2);
 
@@ -332,7 +333,7 @@ mod tests {
     async fn merge_delete() {
         let dir = temp_dir::TempDir::with_prefix("b2").unwrap();
 
-        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+        let db: B2<String> = B2::open(dir.path(), Options::default()).await.unwrap();
 
         let k = "some key".to_string();
 
@@ -351,7 +352,7 @@ mod tests {
 
         drop(db);
 
-        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+        let db: B2<String> = B2::open(dir.path(), Options::default()).await.unwrap();
 
         db.merge().await.unwrap();
 
@@ -364,7 +365,7 @@ mod tests {
     async fn merge_same_key() {
         let dir = temp_dir::TempDir::with_prefix("b2").unwrap();
 
-        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+        let db: B2<String> = B2::open(dir.path(), Options::default()).await.unwrap();
 
         let k = "some key".to_string();
 
@@ -375,7 +376,7 @@ mod tests {
 
         drop(db);
 
-        let db: B2<String> = B2::new(dir.path(), Options::default()).await.unwrap();
+        let db: B2<String> = B2::open(dir.path(), Options::default()).await.unwrap();
 
         db.insert(k.clone(), v2.clone()).await.unwrap();
 
