@@ -51,3 +51,4 @@ I have known about Bitcask for a while, and I wanted to learn it by building a w
 - [x] value_size to ValueSize(u32)
 - [ ] tx_id to `time::Time`?
 - [x] use crc32 instead of blake3
+- [x] make internal write buffer size configurable

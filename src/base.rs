@@ -70,7 +70,8 @@ where
             .open(active_file_path)
             .await?;
 
-        let active_file = tokio::io::BufWriter::new(active_file);
+        let active_file =
+            tokio::io::BufWriter::with_capacity(options.write_buffer_size, active_file);
 
         Ok(Self {
             db_directory: db_directory.to_owned(),

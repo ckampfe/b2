@@ -39,6 +39,9 @@ pub struct Options {
     pub max_concurrent_readers: u32,
     /// when to flush the database's in-memory write buffer
     pub flush_behavior: FlushBehavior,
+    /// the size of the internal write buffer, in bytes.
+    /// defaults to 8kB.
+    pub write_buffer_size: usize,
 }
 
 impl Default for Options {
@@ -47,6 +50,7 @@ impl Default for Options {
             max_file_size_bytes: 2u64.pow(28),
             max_concurrent_readers: 1024,
             flush_behavior: FlushBehavior::default(),
+            write_buffer_size: 8 * 1024,
         }
     }
 }
