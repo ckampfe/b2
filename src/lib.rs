@@ -142,6 +142,10 @@ where
         let mut base = self.base.write().await;
         base.flush().await
     }
+
+    pub fn db_directory(&self) -> &Path {
+        &self.db_directory
+    }
 }
 
 impl<K> B2<K>

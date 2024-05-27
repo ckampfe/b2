@@ -73,7 +73,7 @@ impl Record {
 
         let hash = crc32fast::hash(&buf[Self::HASH_SIZE..]);
         let hash_bytes = hash.to_be_bytes();
-        // ...and finally set the first 32 bytes to the hash
+        // ...and finally set the first HASH_SIZE bytes to the hash
         buf[..Self::HASH_SIZE].copy_from_slice(&hash_bytes);
 
         Ok(Record { buf })

@@ -54,9 +54,14 @@ where
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct EntryPointer {
+    /// the file that contains the data this pointer refers to
     pub(crate) file_id: FileId,
+    /// the absolute position in the file, in bytes, of the start of the value field
+    /// this pointer refers to
     pub(crate) value_position: u64,
+    /// the size in bytes of the value field this pointer refers to
     pub(crate) value_size: ValueSize,
+    /// the txid allows us to answer for two entries, "which happened first?"
     pub(crate) tx_id: TxId,
 }
 
@@ -82,7 +87,7 @@ impl<K> Loadable<K> for EntryWithLiveness
 where
     K: Eq + Hash + DeserializeOwned,
 {
-    async fn read<R: AsyncRead + Unpin>(
+    async fn read_one<R: AsyncRead + Unpin>(
         reader: &mut tokio::io::BufReader<R>,
         offset: &mut u64,
         file_id: FileId,

@@ -1,5 +1,4 @@
 use crate::keydir::{EntryPointer, EntryWithLiveness, FileId, Keydir, Liveness};
-use crate::loadable::Loadable;
 use crate::merge_pointer::MergePointer;
 use crate::record::{Record, TxId};
 use crate::Options;
@@ -22,7 +21,9 @@ where
     keydir: Keydir<K>,
     active_file: tokio::io::BufWriter<tokio::fs::File>,
     active_file_id: FileId,
+    /// the current offset into the current active file
     offset: u64,
+    /// the current txid
     tx_id: TxId,
 }
 
@@ -43,8 +44,7 @@ where
         let active_file_id = latest_file_id + 1;
 
         let all_entries_with_livenesses: HashMap<K, EntryWithLiveness> =
-            <EntryWithLiveness as Loadable<K>>::load_latest_entries(db_directory, &db_file_ids)
-                .await?;
+            crate::loadable::load_latest_entries(db_directory, &db_file_ids).await?;
 
         let all_entries = all_entries_with_livenesses
             .into_iter()
@@ -159,11 +159,8 @@ where
     pub(crate) async fn merge(&mut self) -> crate::Result<()> {
         let mut inactive_db_files = self.inactive_db_file_ids().await?;
 
-        let merge_pointers = <MergePointer as Loadable<K>>::load_latest_entries(
-            &self.db_directory,
-            &inactive_db_files,
-        )
-        .await?;
+        let merge_pointers: HashMap<K, MergePointer> =
+            crate::loadable::load_latest_entries(&self.db_directory, &inactive_db_files).await?;
 
         let live_merge_pointers = merge_pointers
             .into_iter()

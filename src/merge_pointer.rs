@@ -9,7 +9,6 @@ use tokio::io::AsyncRead;
 /// used for merging db files
 #[derive(PartialEq)]
 pub(crate) struct MergePointer {
-    /// whether the data is an insert or a delete
     pub(crate) liveness: Liveness,
     pub(crate) file_id: FileId,
     pub(crate) tx_id: TxId,
@@ -25,8 +24,11 @@ impl PartialOrd for MergePointer {
     }
 }
 
-impl<K: Eq + Hash + DeserializeOwned> Loadable<K> for MergePointer {
-    async fn read<R: AsyncRead + Unpin>(
+impl<K> Loadable<K> for MergePointer
+where
+    K: Eq + Hash + DeserializeOwned,
+{
+    async fn read_one<R: AsyncRead + Unpin>(
         reader: &mut tokio::io::BufReader<R>,
         offset: &mut u64,
         file_id: FileId,
