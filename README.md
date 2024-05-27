@@ -2,10 +2,19 @@
 
 An implementation of [Bitcask](https://riak.com/assets/bitcask-intro.pdf) as a Rust library.
 
-## what can it do
+## when would something like this make sense?
 
-Bitcask presents a very simple KV store API, so that is what this does, too.
-See the Bitcask paper to understand why Bitcask's particular conception of a KV store is unique and interesting.
+From a user's perspective, you can think of B2 (and Bitcask) as a disk-backed hashmap.
+Operationally, there is more to it than that, but "hashmap, but on disk" is a good first approximation of how you use it.
+
+This kind of storage model might make sense for you if:
+- a simple key/value information model is enough for your domain
+- pure in-memory storage does not work for you; values must be stored on disk
+- you require type flexibility; values can be any types that implement `Serialize` and `DeserializeOwned`
+- read and write latency are important to your domain
+- your keyspace (all keys your database knows about) fits in system memory
+
+## what can it do
 
 This is the public API:
 
@@ -14,20 +23,26 @@ pub async fn new(db_directory: &Path, options: Options) -> Result<Self>
 pub async fn get<V: Serialize + DeserializeOwned + Send>(&self, key: &K) -> Result<Option<V>>
 pub async fn insert<V: Serialize + DeserializeOwned + Send>(&self, k: K, v: V) -> Result<()>
 pub async fn remove(&self, k: K) -> Result<()>
+pub async fn keys(&self) -> Vec<K>
 pub async fn contains_key(&self, k: &K) -> bool
 pub async fn merge(&self) -> Result<()>
 pub async fn flush(&self) -> Result<()>
+pub fn db_directory(&self) -> &Path
 ```
 
-For a given database, keys must all be the same type (i.e., all `String`, or whatever other type can implement `Serialize` and `DeserializeOwned`), but values can vary arbitrarily, again as long as they can be serialized and deserialized. This could change at some point, who knows. See the tests for examples of this.
+For a given database, keys must all be the same type (i.e., all `String`, or whatever other type can implement `Serialize` and `DeserializeOwned`). This may be relaxed at some point.
 
-In terms of concurrency, right now this uses a `tokio::sync::RwLock`, so there can be: `(N readers) XOR (1 writer)`. Given Bitcask's model, it is possible to relax this so that there can be `(N readers) AND (1 writer)`, and I might do that in the future.
+Values can vary arbitrarily, again as long as they can be serialized and deserialized. This means that for values, B2 is effectively dynamically typed/late bound. Values on disk are just bytes, and they are given a type when you insert/get them.
 
-By default it flushes every write to disk. This is slow, but leads to predictable read-after-write semantics. You can relax this (and increase write throughput) by changing an option.
+In terms of concurrency, right now B2 uses a coarse-grained `tokio::sync::RwLock`, so there can be: `(N readers) XOR (1 writer)`. Given Bitcask's model, it should be possible to relax this so that there can be `(N readers) AND (1 writer)`, and I might do that in the future.
+
+By default B2 flushes every write to disk. This is slow, but leads to predictable read-after-write semantics. You can relax this (and increase write throughput at the expense of read-after-write serializability) by changing an option.
+
+See the Bitcask paper to understand in more detail why Bitcask's particular conception of a key/value store is unique and interesting and why it might or might not make sense for your requirements.
 
 ## is it any good? should I use it?
 
-Probably not! From what I can tell, it is API complete with respect to the Bitcask paper. This does not mean it functions correctly. It is undertested. It uses a simple `tokio::sync::RwLock` internally so its concurrency story is weak. There are probably a bunch of other problems with it. Nonetheless, it is a tiny amount of code in comparison to other database systems, you can probably actually understand what this does just by reading the source.
+Right now, probably not! From what I can tell, B2 is API complete with respect to the Bitcask paper. This does not mean it functions correctly. It is undertested. It uses a simple `tokio::sync::RwLock` internally so its concurrency story is weaker than it could be. There are probably other problems with it. Nonetheless, it is a tiny amount of code in comparison to other database systems (<1500 lines), so you can probably actually understand what this does just by reading the source.
 
 ## why
 
@@ -46,6 +61,7 @@ I have known about Bitcask for a while, and I wanted to learn it by building a w
 - [ ] improve error contexts reported to callers (e.g. with `snafu` or improving use of `thiserror`)
 - [ ] error handling and reporting in the event of a corrupt record
 - [ ] investigate allowing the access of old values
+- [ ] investigate relaxing `K` to callsite-level rather than database-level
 - [x] file_id to FileId(u32)
 - [x] key_size to KeySize(u16)
 - [x] value_size to ValueSize(u32)
