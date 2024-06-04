@@ -9,46 +9,48 @@ use std::str::FromStr;
 use tokio::io::AsyncRead;
 
 #[derive(Debug)]
-pub(crate) struct Keydir<K>
+pub(crate) struct Keydir<K>(HashMap<K, EntryPointer>)
 where
-    K: Eq + Hash,
-{
-    keydir: HashMap<K, EntryPointer>,
-}
+    K: Eq + Hash;
 
 impl<K> Keydir<K>
 where
     K: Eq + Hash,
 {
-    pub(crate) fn new(hm: HashMap<K, EntryPointer>) -> Self {
-        Keydir { keydir: hm }
-    }
-
     pub(crate) fn insert(&mut self, k: K, entry: EntryPointer) -> Option<EntryPointer> {
-        self.keydir.insert(k, entry)
+        self.0.insert(k, entry)
     }
 
     pub(crate) fn get(&self, k: &K) -> Option<&EntryPointer> {
-        self.keydir.get(k)
+        self.0.get(k)
     }
 
     pub(crate) fn remove(&mut self, k: &K) -> Option<EntryPointer> {
-        self.keydir.remove(k)
+        self.0.remove(k)
     }
 
     pub(crate) fn contains_key(&self, k: &K) -> bool {
-        self.keydir.contains_key(k)
+        self.0.contains_key(k)
     }
 
     pub(crate) fn keys(&self) -> std::collections::hash_map::Keys<'_, K, EntryPointer> {
-        self.keydir.keys()
+        self.0.keys()
     }
 
     pub(crate) fn latest_tx_id(&self) -> Option<TxId> {
-        self.keydir
+        self.0
             .values()
             .max_by(|a, b| a.tx_id.cmp(&b.tx_id))
             .map(|entry| entry.tx_id)
+    }
+}
+
+impl<K> From<HashMap<K, EntryPointer>> for Keydir<K>
+where
+    K: Eq + Hash,
+{
+    fn from(value: HashMap<K, EntryPointer>) -> Self {
+        Self(value)
     }
 }
 

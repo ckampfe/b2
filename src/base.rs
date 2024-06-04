@@ -46,7 +46,7 @@ where
         let all_entries_with_livenesses: HashMap<K, EntryWithLiveness> =
             crate::loadable::load_latest_entries(db_directory, &db_file_ids).await?;
 
-        let all_entries = all_entries_with_livenesses
+        let all_entries: HashMap<K, EntryPointer> = all_entries_with_livenesses
             .into_iter()
             .filter_map(|(key, entry_with_liveness)| {
                 if entry_with_liveness.liveness == Liveness::Deleted {
@@ -57,7 +57,7 @@ where
             })
             .collect();
 
-        let keydir = Keydir::new(all_entries);
+        let keydir = Keydir::from(all_entries);
 
         let latest_tx_id = keydir.latest_tx_id().unwrap_or(0.into());
 
