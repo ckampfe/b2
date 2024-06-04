@@ -60,8 +60,8 @@ I have known about Bitcask for a while, and I wanted to learn it by building a w
 - [x] move more of write_insert and write_delete into Record
 - [ ] improve error contexts reported to callers (e.g. with `snafu` or improving use of `thiserror`)
 - [ ] error handling and reporting in the event of a corrupt record
-- [ ] investigate allowing the access of old values
-- [ ] investigate relaxing `K` to callsite-level rather than database-level
+- [ ] investigate allowing the access of old values rather than having the keydir refer to only the most recent value
+- [x] investigate relaxing `K` to callsite-level rather than database-level (decision: not right now. this would require either making `K` be `Box<dyn KeydirKey>` or serializing `K` and having every access of the keydir require a serialization, at minimum)
 - [x] file_id to FileId(u32)
 - [x] key_size to KeySize(u16)
 - [x] value_size to ValueSize(u32)
